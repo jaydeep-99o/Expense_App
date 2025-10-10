@@ -10,10 +10,69 @@ function isManagerOrAdmin(role: string) {
   return role === 'manager' || role === 'admin';
 }
 
-// GET /api/flows  -> returns the singleton flow config (creates default if missing)
-router.get('/', ensureAuth, async (req: any, res) => {
-  if (!isManagerOrAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
+// GET /api/flows/default -> returns the singleton flow config (creates default if missing)
+router.get('/default', ensureAuth, async (req: any, res) => {
+  if (!isManagerOrAdmin(req.user.role)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
 
+  try {
+    let cfg = await FlowConfig.findOne({ key: 'default' });
+    if (!cfg) {
+      cfg = await FlowConfig.create({
+        key: 'default',
+        isManagerFirst: true,
+        sequenceEnabled: false,
+        approvers: [],
+        percentThreshold: undefined,
+        specificApproverId: undefined,
+      });
+    }
+    return res.json(cfg);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/flows/default -> upsert and return
+router.put('/default', ensureAuth, async (req: any, res) => {
+  if (!isManagerOrAdmin(req.user.role)) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const schema = z.object({
+    isManagerFirst: z.boolean(),
+    sequenceEnabled: z.boolean(),
+    approvers: z.array(z.object({ 
+      userId: z.number(), 
+      required: z.boolean() 
+    })),
+    percentThreshold: z.number().min(1).max(100).optional().nullable(),
+    specificApproverId: z.number().optional().nullable(),
+  });
+
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ 
+      error: 'Invalid body', 
+      details: parsed.error.errors 
+    });
+  }
+
+  try {
+    const cfg = await FlowConfig.findOneAndUpdate(
+      { key: 'default' },
+      { key: 'default', ...parsed.data },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+    return res.json(cfg);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+// Helper function to get flow config (use this in approval logic)
+export async function getFlowConfig() {
   let cfg = await FlowConfig.findOne({ key: 'default' });
   if (!cfg) {
     cfg = await FlowConfig.create({
@@ -25,30 +84,7 @@ router.get('/', ensureAuth, async (req: any, res) => {
       specificApproverId: undefined,
     });
   }
-  return res.json(cfg);
-});
-
-// PUT /api/flows  -> upsert and return
-router.put('/', ensureAuth, async (req: any, res) => {
-  if (!isManagerOrAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
-
-  const schema = z.object({
-    isManagerFirst: z.boolean(),
-    sequenceEnabled: z.boolean(),
-    approvers: z.array(z.object({ userId: z.number(), required: z.boolean() })),
-    percentThreshold: z.number().min(1).max(100).optional(),
-    specificApproverId: z.number().optional(),
-  });
-
-  const parsed = schema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
-
-  const cfg = await FlowConfig.findOneAndUpdate(
-    { key: 'default' },
-    { key: 'default', ...parsed.data },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
-  );
-  return res.json(cfg);
-});
+  return cfg;
+}
 
 export default router;

@@ -1,44 +1,40 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { Plus, Calendar, FileText, Tag, DollarSign, Eye, Filter, CheckCircle, XCircle, Clock, FileCheck, Inbox } from 'lucide-react'
-
-type ExpenseStatus = 'draft' | 'waiting' | 'approved' | 'rejected' | 'submitted'
-
-type Expense = {
-  id: number
-  spendDate: string
-  description: string
-  category: string
-  amount: number
-  currency: string
-  amountCompanyCcy: number
-  companyCurrency: string
-  status: ExpenseStatus
-}
+import {
+  Plus, Calendar, FileText, Tag, DollarSign, Eye, Filter,
+  CheckCircle, XCircle, Clock, FileCheck, Inbox
+} from 'lucide-react'
+import { ExpensesAPI } from '../lib/api'
+import type { Expense, ExpenseStatus } from '../types'
 
 export default function ExpenseList() {
-  const nav = useNavigate()
   const [rows, setRows] = useState<Expense[]>([])
   const [tab, setTab] = useState<ExpenseStatus | 'all'>('all')
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  // Get company currency once (from stored login payload)
+  const stored = (() => {
+    try { return JSON.parse(localStorage.getItem('expman_user') || 'null') } catch { return null }
+  })()
+  const companyCurrency: string = stored?.company?.currency ?? 'USD'
 
   useEffect(() => {
-    // Simulate API call
-    setTimeout(() => {
-      setRows([
-        { id: 1, spendDate: '2024-03-15T10:00:00Z', description: 'Business lunch with client', category: 'Meals',   amount: 85,  currency: 'USD', amountCompanyCcy: 85,  companyCurrency: 'USD', status: 'approved' },
-        { id: 2, spendDate: '2024-03-14T10:00:00Z', description: 'Conference flight tickets',   category: 'Travel', amount: 450, currency: 'EUR', amountCompanyCcy: 500, companyCurrency: 'USD', status: 'waiting' },
-        { id: 3, spendDate: '2024-03-10T10:00:00Z', description: 'Hotel accommodation',         category: 'Lodging',amount: 200, currency: 'USD', amountCompanyCcy: 200, companyCurrency: 'USD', status: 'approved' },
-        { id: 4, spendDate: '2024-03-08T10:00:00Z', description: 'Office supplies',             category: 'Supplies',amount: 45,  currency: 'USD', amountCompanyCcy: 45,  companyCurrency: 'USD', status: 'rejected' },
-        { id: 5, spendDate: '2024-03-05T10:00:00Z', description: 'Software subscription',       category: 'Software',amount: 99,  currency: 'USD', amountCompanyCcy: 99,  companyCurrency: 'USD', status: 'draft' },
-        // Example "submitted" row:
-        { id: 6, spendDate: '2024-03-18T10:00:00Z', description: 'Taxi to airport',             category: 'Travel', amount: 60,  currency: 'EUR', amountCompanyCcy: 66,  companyCurrency: 'USD', status: 'submitted' },
-      ])
-      setLoading(false)
-    }, 800)
+    loadExpenses()
   }, [])
 
-  // Sort newest → oldest once, then filter
+  async function loadExpenses() {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await ExpensesAPI.mine()
+      setRows(data)
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load expenses')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const sorted = useMemo(
     () =>
       [...rows].sort(
@@ -67,13 +63,11 @@ export default function ExpenseList() {
     status === 'all' ? rows.length : rows.filter(r => r.status === status).length
 
   function newExpense() {
-    alert('Navigate to new expense form')
-    // nav('/expenses/new')
+    window.location.href = '/expenses/new'
   }
 
   function viewExpense(id: number) {
-    // nav(`/expenses/${id}`)
-    alert(`Navigate to expense #${id}`)
+    window.location.href = `/expenses/${id}`
   }
 
   const fmt = (amt: number, cur: string) => {
@@ -85,21 +79,16 @@ export default function ExpenseList() {
   }
 
   const totalCompany = filtered.reduce((sum, e) => sum + e.amountCompanyCcy, 0)
-  const sameCompanyCcy = filtered.length
-    ? filtered.every(e => e.companyCurrency === filtered[0].companyCurrency)
-    : true
-  const totalLabel = sameCompanyCcy ? filtered[0]?.companyCurrency ?? 'USD' : 'company ccy'
+  const totalLabel = companyCurrency
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 relative overflow-hidden">
-      {/* Animated background blobs */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -right-40 w-96 h-96 bg-purple-200 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob"></div>
         <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-blue-200 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob animation-delay-2000"></div>
       </div>
 
       <div className="relative z-10 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
-        {/* Header */}
         <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-lg border border-white/40 p-4 sm:p-6 mb-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-4">
@@ -121,7 +110,21 @@ export default function ExpenseList() {
           </div>
         </div>
 
-        {/* Tabs */}
+        {error && (
+          <div role="alert" className="bg-red-50 border-l-4 border-red-500 rounded-lg p-4 flex items-start gap-3 mb-6">
+            <XCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm text-red-800 font-medium">{error}</p>
+              <button
+                onClick={loadExpenses}
+                className="text-sm text-red-700 underline hover:text-red-900 mt-1"
+              >
+                Try again
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-lg border border-white/40 p-4 mb-6">
           <div className="flex items-center gap-2 mb-3 text-sm text-gray-600">
             <Filter className="w-4 h-4" />
@@ -152,7 +155,6 @@ export default function ExpenseList() {
           </div>
         </div>
 
-        {/* Table Card */}
         <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-lg border border-white/40 overflow-hidden">
           {loading ? (
             <div className="p-12 text-center">
@@ -242,7 +244,7 @@ export default function ExpenseList() {
                           {fmt(e.amount, e.currency)}
                         </div>
                         <div className="text-xs text-gray-500">
-                          {fmt(e.amountCompanyCcy, e.companyCurrency)}
+                          {fmt(e.amountCompanyCcy, companyCurrency)}
                         </div>
                       </td>
                       <td className="p-4">
@@ -265,7 +267,6 @@ export default function ExpenseList() {
           )}
         </div>
 
-        {/* Summary Card */}
         {!loading && filtered.length > 0 && (
           <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-lg border border-white/40 p-6 mt-6">
             <div className="flex items-center justify-between">
@@ -280,7 +281,7 @@ export default function ExpenseList() {
               <div className="text-sm text-gray-600">
                 Total:{' '}
                 <span className="font-bold text-indigo-600 text-lg">
-                  {sameCompanyCcy ? fmt(totalCompany, totalLabel) : `${totalCompany} ${totalLabel}`}
+                  {fmt(totalCompany, totalLabel)}
                 </span>
               </div>
             </div>

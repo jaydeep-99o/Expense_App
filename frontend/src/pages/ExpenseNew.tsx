@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import {
   Calendar, Tag, FileText, DollarSign, CreditCard, MessageSquare,
-  Upload, Scan, Save, X, ArrowLeft, CheckCircle, XCircle,
-  File as FileIcon, // 👈 rename to avoid shadowing DOM File type
-  Loader2
+  Upload, Scan, Save, X, ArrowLeft, CheckCircle, XCircle, File, Loader2
 } from 'lucide-react'
+import Tesseract from 'tesseract.js'
+import { ExpensesAPI } from '../lib/api'
 
 export default function ExpenseNew() {
   const [description, setDescription] = useState('')
@@ -14,14 +14,15 @@ export default function ExpenseNew() {
   const [remarks, setRemarks] = useState('')
   const [amount, setAmount] = useState<number | ''>('')
   const [currency, setCurrency] = useState('INR')
-  const [file, setFile] = useState<File | null>(null) // DOM File type
+  const [file, setFile] = useState<globalThis.File | null>(null)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState('')
   const [saving, setSaving] = useState(false)
   const [ocring, setOcring] = useState(false)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [ocrProgress, setOcrProgress] = useState(0)
 
-  async function submit(e: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setErr('')
     setMsg('')
@@ -32,19 +33,27 @@ export default function ExpenseNew() {
     }
 
     setSaving(true)
-    // Simulate API call
-    setTimeout(() => {
-      try {
-        setMsg('Expense saved successfully!')
-        setTimeout(() => {
-          alert('Navigate to /expenses')
-        }, 1000)
-      } catch (e: any) {
-        setErr(e?.message || 'Failed to save expense')
-      } finally {
-        setSaving(false)
-      }
-    }, 1500)
+    try {
+      await ExpensesAPI.create({
+        employeeId: 1, // TODO: Replace with actual employee id from context/auth
+        spendDate: new Date(spendDate).toISOString(),
+        category,
+        description: description.trim(),
+        amount: Number(amount),
+        currency,
+        paidBy,
+        remarks: remarks.trim() || undefined,
+      })
+      
+      setMsg('Expense saved successfully!')
+      setTimeout(() => {
+        window.history.back()
+      }, 1500)
+    } catch (error: any) {
+      setErr(error?.message || 'Failed to save expense')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function runOCR() {
@@ -52,21 +61,169 @@ export default function ExpenseNew() {
       setMsg('Please attach a receipt image first')
       return
     }
+    
     setOcring(true)
+    setOcrProgress(0)
     setMsg('Reading receipt...')
-    setTimeout(() => {
-      try {
-        setAmount(145.5)
-        setCurrency('USD')
-        setSpendDate('2024-03-15')
-        setDescription('Business lunch at Restaurant')
+    setErr('')
+
+    try {
+      const result = await Tesseract.recognize(
+        previewUrl || file,
+        'eng',
+        {
+          logger: (m) => {
+            if (m.status === 'recognizing text') {
+              setOcrProgress(Math.round(m.progress * 100))
+            }
+          }
+        }
+      )
+
+      const text = result.data.text
+      console.log('OCR Text:', text)
+
+      const extractedData = extractReceiptInfo(text)
+      
+      if (extractedData.amount) {
+        setAmount(extractedData.amount)
         setMsg('Receipt processed successfully! Please review the details.')
-      } catch {
-        setMsg('Could not read the receipt. Please fill manually.')
-      } finally {
-        setOcring(false)
+      } else {
+        setMsg('Receipt scanned, but could not find amount. Please fill manually.')
       }
-    }, 2000)
+
+      if (extractedData.date) {
+        setSpendDate(extractedData.date)
+      }
+      
+      if (extractedData.description) {
+        setDescription(extractedData.description)
+      }
+
+      if (extractedData.currency) {
+        setCurrency(extractedData.currency)
+      }
+
+    } catch (error) {
+      console.error('OCR Error:', error)
+      setErr('Could not read the receipt. Please fill manually.')
+    } finally {
+      setOcring(false)
+      setOcrProgress(0)
+    }
+  }
+
+  function extractReceiptInfo(text: string) {
+    const data: {
+      amount?: number
+      date?: string
+      description?: string
+      currency?: string
+    } = {}
+
+    const amountPatterns = [
+      /(?:total|amount|sum|grand total|subtotal)[:\s]*(?:rs\.?|₹|inr|\$|€|£|¥)?\s*([\d,]+\.?\d*)/i,
+      /(?:rs\.?|₹|inr)\s*([\d,]+\.?\d*)/i,
+      /\$\s*([\d,]+\.?\d*)/i,
+      /€\s*([\d,]+\.?\d*)/i,
+      /£\s*([\d,]+\.?\d*)/i,
+      /¥\s*([\d,]+\.?\d*)/i,
+      /total[:\s]*([\d,]+\.?\d*)/i
+    ]
+
+    for (const pattern of amountPatterns) {
+      const match = text.match(pattern)
+      if (match) {
+        const amt = parseFloat(match[1].replace(/,/g, ''))
+        if (amt > 0) {
+          data.amount = amt
+          break
+        }
+      }
+    }
+
+    if (text.match(/₹|INR|Rs\.?/i)) {
+      data.currency = 'INR'
+    } else if (text.match(/\$|USD/i)) {
+      data.currency = 'USD'
+    } else if (text.match(/€|EUR/i)) {
+      data.currency = 'EUR'
+    } else if (text.match(/£|GBP/i)) {
+      data.currency = 'GBP'
+    } else if (text.match(/¥|JPY|YEN/i)) {
+      data.currency = 'JPY'
+    }
+
+    const datePatterns = [
+      /(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/,
+      /(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/,
+      /(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{4})/i,
+      /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/i
+    ]
+
+    for (const pattern of datePatterns) {
+      const match = text.match(pattern)
+      if (match) {
+        try {
+          let dateStr = ''
+          if (match[0].includes('/') || match[0].includes('-') || match[0].includes('.')) {
+            const parts = match[0].split(/[\/\-.]/)
+            if (parts[0].length === 4) {
+              dateStr = `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`
+            } else {
+              const year = parts[2]
+              const month = parts[1].padStart(2, '0')
+              const day = parts[0].padStart(2, '0')
+              dateStr = `${year}-${month}-${day}`
+            }
+          } else {
+            const monthMap: { [key: string]: string } = {
+              jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+              jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12'
+            }
+            const monthName = match[1]?.toLowerCase().slice(0, 3) || match[2]?.toLowerCase().slice(0, 3)
+            const day = match[2] || match[1]
+            const year = match[3]
+            if (monthName && monthMap[monthName]) {
+              dateStr = `${year}-${monthMap[monthName]}-${day.padStart(2, '0')}`
+            }
+          }
+          
+          if (dateStr && !isNaN(Date.parse(dateStr))) {
+            data.date = dateStr
+            break
+          }
+        } catch (e) {
+          continue
+        }
+      }
+    }
+
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 3)
+    const merchantPatterns = [
+      /^([A-Z][A-Za-z\s&'-]{3,30})(?:\s|$)/,
+      /merchant[:\s]*([^\n]+)/i,
+      /store[:\s]*([^\n]+)/i
+    ]
+
+    for (const pattern of merchantPatterns) {
+      const match = text.match(pattern)
+      if (match && match[1]) {
+        data.description = match[1].trim()
+        break
+      }
+    }
+
+    if (!data.description && lines.length > 0) {
+      for (const line of lines) {
+        if (line.length > 5 && !line.match(/^\d+$/) && !line.match(/^[\/\-_.]+$/)) {
+          data.description = line.substring(0, 50)
+          break
+        }
+      }
+    }
+
+    return data
   }
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -74,7 +231,6 @@ export default function ExpenseNew() {
     setErr('')
     setMsg('')
     if (selectedFile) {
-      // basic size check (<=5MB)
       if (selectedFile.size > 5 * 1024 * 1024) {
         setErr('File too large (max 5MB)')
         e.currentTarget.value = ''
@@ -98,15 +254,11 @@ export default function ExpenseNew() {
   }
 
   function cancel() {
-    alert('Navigate back')
+    window.history.back()
   }
-
-  const categories = ['Food', 'Travel', 'Hotel', 'Fuel', 'Supplies', 'Software', 'Other']
-  const currencies = ['INR', 'USD', 'EUR', 'GBP', 'JPY']
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 relative overflow-hidden">
-      {/* Animated background blobs */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -right-40 w-96 h-96 bg-purple-200 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob"></div>
         <div className="absolute -bottom-40 -left-40 w-96 h-96 bg-blue-200 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob animation-delay-2000"></div>
@@ -114,7 +266,6 @@ export default function ExpenseNew() {
       </div>
 
       <div className="relative z-10 p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto">
-        {/* Back Button */}
         <button
           onClick={cancel}
           className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-indigo-600 transition-colors mb-6"
@@ -123,7 +274,6 @@ export default function ExpenseNew() {
           <span>Back to Expenses</span>
         </button>
 
-        {/* Header */}
         <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-lg border border-white/40 p-6 mb-6">
           <div className="flex items-center gap-4">
             <div className="w-14 h-14 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-2xl flex items-center justify-center">
@@ -136,7 +286,6 @@ export default function ExpenseNew() {
           </div>
         </div>
 
-        {/* Messages */}
         {msg && (
           <div
             role="status"
@@ -165,9 +314,7 @@ export default function ExpenseNew() {
           </div>
         )}
 
-        {/* Form */}
-        <form onSubmit={submit} className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-lg border border-white/40 p-6 sm:p-8 space-y-6">
-          {/* Date and Category */}
+        <div className="bg-white/90 backdrop-blur-xl rounded-2xl shadow-lg border border-white/40 p-6 sm:p-8 space-y-6">
           <div className="grid sm:grid-cols-2 gap-6">
             <div>
               <label htmlFor="date" className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
@@ -203,7 +350,6 @@ export default function ExpenseNew() {
             </div>
           </div>
 
-          {/* Description */}
           <div>
             <label htmlFor="description" className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
               <FileText className="w-4 h-4 text-indigo-600" />
@@ -220,7 +366,6 @@ export default function ExpenseNew() {
             />
           </div>
 
-          {/* Amount, Currency, Payment Method */}
           <div className="grid sm:grid-cols-3 gap-6">
             <div>
               <label htmlFor="amount" className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
@@ -274,7 +419,6 @@ export default function ExpenseNew() {
             </div>
           </div>
 
-          {/* Remarks */}
           <div>
             <label htmlFor="remarks" className="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
               <MessageSquare className="w-4 h-4 text-indigo-600" />
@@ -290,7 +434,6 @@ export default function ExpenseNew() {
             />
           </div>
 
-          {/* Receipt Upload */}
           <div className="border-2 border-dashed border-gray-300 rounded-2xl p-6 bg-gray-50">
             <div className="flex items-start gap-4">
               <div className="flex-1">
@@ -303,7 +446,7 @@ export default function ExpenseNew() {
                   <div>
                     <label htmlFor="file" className="cursor-pointer">
                       <div className="flex items-center justify-center gap-3 px-6 py-4 bg-white hover:bg-gray-50 border-2 border-gray-200 hover:border-gray-300 rounded-xl transition-all duration-200">
-                        <FileIcon className="w-5 h-5 text-gray-500" />
+                        <File className="w-5 h-5 text-gray-500" />
                         <span className="text-sm font-medium text-gray-700">Choose receipt image</span>
                       </div>
                     </label>
@@ -321,7 +464,7 @@ export default function ExpenseNew() {
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
-                          <FileIcon className="w-5 h-5 text-indigo-600" />
+                          <File className="w-5 h-5 text-indigo-600" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-gray-900 truncate">{file.name}</p>
@@ -340,32 +483,42 @@ export default function ExpenseNew() {
               </div>
 
               {file && (
-                <button
-                  type="button"
-                  onClick={runOCR}
-                  disabled={ocring}
-                  className="flex items-center gap-2 px-4 py-3 bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 disabled:from-gray-400 disabled:to-gray-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 active:translate-y-0 disabled:transform-none disabled:cursor-not-allowed transition-all duration-200"
-                >
-                  {ocring ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                      <span>Reading...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Scan className="w-5 h-5" />
-                      <span>Extract with OCR</span>
-                    </>
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={runOCR}
+                    disabled={ocring}
+                    className="flex items-center gap-2 px-4 py-3 bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600 disabled:from-gray-400 disabled:to-gray-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 active:translate-y-0 disabled:transform-none disabled:cursor-not-allowed transition-all duration-200"
+                  >
+                    {ocring ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span>Reading...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Scan className="w-5 h-5" />
+                        <span>Extract with OCR</span>
+                      </>
+                    )}
+                  </button>
+                  {ocring && ocrProgress > 0 && (
+                    <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                      <div 
+                        className="bg-gradient-to-r from-purple-500 to-indigo-500 h-full transition-all duration-300"
+                        style={{ width: `${ocrProgress}%` }}
+                      />
+                    </div>
                   )}
-                </button>
+                </div>
               )}
             </div>
           </div>
 
-          {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row gap-3 pt-4">
             <button
-              type="submit"
+              type="button"
+              onClick={handleSubmit}
               disabled={saving}
               className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 active:translate-y-0 disabled:transform-none disabled:cursor-not-allowed transition-all duration-200"
             >
@@ -390,7 +543,7 @@ export default function ExpenseNew() {
               <span>Cancel</span>
             </button>
           </div>
-        </form>
+        </div>
       </div>
 
       <style>{`

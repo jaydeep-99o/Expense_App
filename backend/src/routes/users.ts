@@ -125,5 +125,41 @@ router.post('/:id/resend-invite', ensureAuth, async (req: any, res) => {
   await sendInviteEmail(user.email, user.email, tempPassword);
   res.json({ ok: true, info: 'Invite re-sent.' });
 });
+// PATCH /api/users/:id  (unified update: name, role, managerId)
+router.patch('/:id', ensureAuth, async (req: any, res) => {
+  if (!isManagerOrAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
+
+  const id = Number(req.params.id);
+
+  // Accept any combination of these fields
+  const schema = z.object({
+    name: z.string().min(1).optional(),
+    role: z.enum(['employee', 'manager']).optional(),
+    managerId: z.number().nullable().optional(),
+  });
+  const parsed = schema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
+
+  const patch: any = parsed.data;
+
+  // Business rules
+  if ('role' in patch && patch.role === 'manager' && 'managerId' in patch && patch.managerId != null) {
+    return res.status(400).json({ error: 'manager users cannot have a managerId' });
+  }
+  if ('role' in patch && patch.role === 'employee' && 'managerId' in patch && patch.managerId == null) {
+    return res.status(400).json({ error: 'managerId is required for employees' });
+  }
+  if ('managerId' in patch && patch.managerId != null) {
+    const mgr = await User.findOne({ id: patch.managerId });
+    if (!mgr || mgr.role !== 'manager') {
+      return res.status(400).json({ error: 'managerId must reference an existing manager' });
+    }
+  }
+
+  const u = await User.findOneAndUpdate({ id }, patch, { new: true });
+  if (!u) return res.status(404).json({ error: 'User not found' });
+
+  res.json({ user: toPublic(u) });
+});
 
 export default router;

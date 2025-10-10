@@ -13,13 +13,25 @@ export default function ApprovalsQueue() {
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [open, setOpen] = useState<ExpenseDetail | null>(null)
+  const [selectedTask, setSelectedTask] = useState<ApprovalTask | null>(null)
   const [comment, setComment] = useState('')
   const [actingId, setActingId] = useState<number | null>(null)
+
+  // Read company currency once (from stored login payload)
+  const stored = (() => {
+    try { return JSON.parse(localStorage.getItem('expman_user') || 'null') } catch { return null }
+  })()
+  const companyCurrency: string = stored?.company?.currency ?? 'USD'
+
+  const fmtMoney = (amount: number, ccy: string) => {
+    try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: ccy }).format(amount) }
+    catch { return `${amount} ${ccy}` }
+  }
 
   async function load() {
     setErr(''); setLoading(true)
     try {
-      const list = await ApprovalsAPI.queue()
+      const list = await ApprovalsAPI.queue()        // ← real API call
       setRows(list)
     } catch (e: any) {
       setErr(e?.message || 'Failed to load approvals')
@@ -31,15 +43,22 @@ export default function ApprovalsQueue() {
 
   // ESC to close modal
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(null) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeModal() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  function closeModal() {
+    setOpen(null)
+    setSelectedTask(null)
+    setComment('')
+  }
+
   async function viewExpense(task: ApprovalTask) {
     try {
-      const detail = await ExpensesAPI.get(task.expenseId)
+      const detail = await ExpensesAPI.get(task.expenseId) // ← real API call
       setOpen(detail)
+      setSelectedTask(task)
       setComment('')
     } catch (e: any) {
       setErr(e?.message || 'Failed to load expense')
@@ -49,10 +68,9 @@ export default function ApprovalsQueue() {
   async function act(task: ApprovalTask, decision: 'approved' | 'rejected') {
     try {
       setActingId(task.id)
-      await ApprovalsAPI.decide(task.id, decision, comment.trim() || undefined)
-      setRows(prev => prev.filter(r => r.id !== task.id))
-      setOpen(null)
-      setComment('')
+      await ApprovalsAPI.decide(task.id, decision, comment.trim() || undefined) // ← real API call
+      setRows(prev => prev.filter(r => r.id !== task.id)) // remove from queue
+      closeModal()
     } catch (e: any) {
       setErr(e?.message || 'Action failed')
     } finally {
@@ -67,9 +85,8 @@ export default function ApprovalsQueue() {
 
   function logout() {
     try {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      localStorage.removeItem('reset_required')
+      localStorage.removeItem('expman_token')
+      localStorage.removeItem('expman_user')
     } catch {}
     nav('/login', { replace: true })
   }
@@ -156,7 +173,7 @@ export default function ApprovalsQueue() {
                     <div className="flex items-center gap-2 text-sm text-gray-700 mt-3">
                       <DollarSign className="w-4 h-4 text-indigo-600" />
                       <span className="font-semibold">
-                        {t.amountCompanyCcy} {t.companyCurrency}
+                        {fmtMoney(t.amountCompanyCcy, t.companyCurrency || companyCurrency)}
                       </span>
                       <span className="text-xs text-gray-500">
                         (submitted in {t.submittedCurrency})
@@ -197,10 +214,10 @@ export default function ApprovalsQueue() {
       </div>
 
       {/* Modal */}
-      {open && (
+      {open && selectedTask && (
         <div
           className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn"
-          onClick={() => setOpen(null)}
+          onClick={closeModal}
         >
           <div
             className="w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden animate-slideUp"
@@ -219,7 +236,7 @@ export default function ApprovalsQueue() {
                   </div>
                 </div>
                 <button
-                  onClick={() => setOpen(null)}
+                  onClick={closeModal}
                   className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/20 transition-colors"
                 >
                   <X className="w-5 h-5" />
@@ -236,7 +253,7 @@ export default function ApprovalsQueue() {
                 <DetailField
                   icon={<DollarSign className="w-4 h-4" />}
                   label="Amount"
-                  value={`${open.amount} ${open.currency} (${open.amountCompanyCcy} company)`}
+                  value={`${fmtMoney(open.amount, open.currency)} (${fmtMoney(open.amountCompanyCcy, companyCurrency)})`}
                 />
                 <DetailField icon={<FileText className="w-4 h-4" />} label="Description" value={open.description} wide />
                 {open.remarks && <DetailField icon={<MessageSquare className="w-4 h-4" />} label="Remarks" value={open.remarks} wide />}
@@ -281,7 +298,7 @@ export default function ApprovalsQueue() {
               {/* Action Buttons */}
               <div className="flex flex-col sm:flex-row gap-3">
                 <button
-                  onClick={() => act({ id: 10000 + open.id, expenseId: open.id } as any, 'approved')}
+                  onClick={() => selectedTask && act(selectedTask, 'approved')}
                   disabled={actingId !== null}
                   className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200 disabled:opacity-60"
                 >
@@ -289,7 +306,7 @@ export default function ApprovalsQueue() {
                   <span>Approve</span>
                 </button>
                 <button
-                  onClick={() => act({ id: 10000 + open.id, expenseId: open.id } as any, 'rejected')}
+                  onClick={() => selectedTask && act(selectedTask, 'rejected')}
                   disabled={actingId !== null}
                   className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200 disabled:opacity-60"
                 >
