@@ -27,12 +27,7 @@ function RoleLanding() {
 // simple shells (optional nav)
 function AdminShell() {
   return (
-    <div className="p-6">
-      <nav className="mb-4 flex gap-3 text-sm">
-        <Link className="underline" to="/admin">Home</Link>
-        <Link className="underline" to="/admin/users">Users</Link>
-        <Link className="underline" to="/admin/flows">Approval rules</Link>
-      </nav>
+    <div>
       <Outlet />
     </div>
   )
@@ -40,10 +35,6 @@ function AdminShell() {
 function EmployeeShell() {
   return (
     <div className="p-6">
-      <nav className="mb-4 flex gap-3 text-sm">
-        <Link className="underline" to="/expenses/new">New expense</Link>
-        <Link className="underline" to="/expenses">My expenses</Link>
-      </nav>
       <Outlet />
     </div>
   )
